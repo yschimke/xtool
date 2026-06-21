@@ -136,6 +136,7 @@ let package = Package(
             name: "XToolTests",
             dependencies: [
                 "XToolSupport",
+                "PackLib",
             ]
         ),
         .target(
