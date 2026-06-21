@@ -29,6 +29,28 @@ public struct PackSchemaBase: Codable, Sendable {
         public var resources: [String]?
         public var entitlementsPath: String?
     }
+
+    /// Configuration for a Kotlin Multiplatform shared module that xtool builds
+    /// (via Gradle) into an XCFramework before building the app.
+    public var kotlin: Kotlin?
+
+    public struct Kotlin: Codable, Sendable {
+        /// The XCFramework name as registered via `XCFramework("...")` in the
+        /// Gradle build. Used to derive the assemble task and output path.
+        public var framework: String
+
+        /// The Gradle module that produces the XCFramework, e.g. "shared".
+        /// Defaults to "shared".
+        public var module: String?
+
+        /// Directory containing the Gradle wrapper (`gradlew`). Gradle is invoked
+        /// from here. Defaults to ".".
+        public var projectDir: String?
+
+        /// Override for the Gradle task. Defaults to
+        /// `assemble<Framework><Configuration>XCFramework`.
+        public var task: String?
+    }
 }
 
 @dynamicMemberLookup

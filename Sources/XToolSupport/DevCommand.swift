@@ -47,6 +47,16 @@ struct PackOperation {
             options: []
         )
 
+        // If the project has a Kotlin Multiplatform shared module, build it into an
+        // XCFramework and stage it before planning, so SwiftPM can resolve the binary
+        // target that references it.
+        if let kotlin = schema.kotlin {
+            try await KotlinBuilder(
+                kotlin: kotlin,
+                configuration: buildOptions.configuration
+            ).run()
+        }
+
         let planner = Planner(
             buildSettings: buildSettings,
             schema: schema
