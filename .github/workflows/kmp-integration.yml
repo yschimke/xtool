@@ -1,0 +1,80 @@
+name: KMP Integration
+
+# Integration test for xtool's Kotlin Multiplatform support: builds a real-world
+# KMP app (PeopleInSpace) end-to-end with xtool on macOS — Gradle assembles the
+# shared XCFramework (Kotlin/Native iOS compile), xtool stages + embeds it, and
+# SwiftPM compiles the SwiftUI app against it. Stops short of signing/device
+# install (no Apple account needed), which is the most CI can verify headlessly.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  peopleinspace:
+    name: Build PeopleInSpace with xtool
+    runs-on: macos-26
+    steps:
+      - name: Checkout xtool
+        uses: actions/checkout@v6
+
+      - uses: ./.github/actions/configure-xcode
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Build xtool
+        run: swift build --product xtool
+
+      - name: Checkout PeopleInSpace
+        uses: actions/checkout@v6
+        with:
+          repository: yschimke/PeopleInSpace
+          ref: agent/xtool-kmp-builds
+          path: peopleinspace
+          # PeopleInSpace is a public fork; no token needed. If it becomes
+          # private, supply `token:` with a PAT that can read it.
+
+      - name: Build the xtool app
+        working-directory: peopleinspace/xtoolApp
+        env:
+          # PeopleInSpace turns on Gradle's configuration cache, which the
+          # multiplatform-swiftpackage plugin isn't compatible with. xtool drives
+          # gradlew directly with no arg passthrough, so disable it via the
+          # environment (gradlew honors GRADLE_OPTS system properties).
+          GRADLE_OPTS: "-Dorg.gradle.configuration-cache=false -Dorg.gradle.unsafe.configuration-cache=false"
+        run: |
+          set -euo pipefail
+          XTOOL="$GITHUB_WORKSPACE/.build/debug/xtool"
+          "$XTOOL" --version || true
+          # Assembles :common's PeopleInSpaceKit XCFramework, stages + embeds it,
+          # then compiles the SwiftUI app for arm64-apple-ios. No --sign: we are
+          # validating the build, not installing to a device.
+          "$XTOOL" dev build
+
+      - name: Verify the .app was produced
+        working-directory: peopleinspace/xtoolApp
+        run: |
+          set -euo pipefail
+          APP="xtool/PeopleInSpaceXtool.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::xtool dev build did not produce $APP"
+            ls -la xtool || true
+            exit 1
+          fi
+          echo "Built $APP"
+          ls -la "$APP"
+          # Sanity-check the embedded shared framework made it into the bundle.
+          test -d "$APP/Frameworks/common.framework" \
+            && echo "Embedded common.framework ✓" \
+            || echo "::warning::common.framework not found under $APP/Frameworks"
