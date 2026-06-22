@@ -23,6 +23,50 @@ mkdir -p "$MARKER_DIR"
 
 log() { echo "session-start: $*"; }
 
+# ---------------------------------------------------------------------------
+# Required network hosts.
+#
+# This environment's outbound network is governed by a policy allowlist. The
+# hosts below MUST be reachable for provisioning to succeed; add any that the
+# preflight reports as blocked to the environment's network policy.
+#
+#   download.swift.org     Swift toolchain (swiftly). MANDATORY -- the Linux
+#                          toolchain is published nowhere else (no GitHub
+#                          mirror, no apt package). Without it `swift build`,
+#                          `swift test`, and `xtool` itself cannot be built.
+#   github.com             Sources (libimobiledevice stack, xadi) + ldc release.
+#   services.gradle.org    Gradle distribution (xtool's own builds).
+#
+# Needed only to build/test Kotlin Multiplatform projects via Gradle:
+#   repo.maven.apache.org / repo1.maven.org   Kotlin, coroutines, etc.
+#   plugins.gradle.org     Gradle plugins (KMP, swiftpackage, SKIE, ...).
+#   maven.google.com       AndroidX / KMP artifacts.
+#   dl.google.com          Android Gradle Plugin -- Android side only; NOT
+#                          needed to assemble an iOS XCFramework.
+#
+# (dlang.org is no longer required: ldc is fetched from GitHub below.)
+# ---------------------------------------------------------------------------
+preflight_hosts() {
+    local blocked=() h
+    for h in download.swift.org github.com services.gradle.org \
+             repo.maven.apache.org plugins.gradle.org maven.google.com; do
+        curl -fsS -o /dev/null --max-time 15 "https://$h/" 2>/dev/null || blocked+=("$h")
+    done
+    if [ "${#blocked[@]}" -gt 0 ]; then
+        log "WARNING: required hosts appear blocked by the network policy:"
+        for h in "${blocked[@]}"; do log "  - $h"; done
+        case " ${blocked[*]} " in
+            *" download.swift.org "*)
+                log "  download.swift.org is MANDATORY for the Swift toolchain; the install" ;;
+        esac
+        case " ${blocked[*]} " in
+            *" download.swift.org "*)
+                log "  step will fail until it is added to the allowlist." ;;
+        esac
+    fi
+}
+preflight_hosts
+
 # Run a command with sudo if available and not already root.
 maybe_sudo() {
     if [ "$(id -u)" -eq 0 ]; then
@@ -97,25 +141,56 @@ build_autotools_lib libimobiledevice \
     https://github.com/libimobiledevice/libimobiledevice.git master --without-cython
 
 # ---------------------------------------------------------------------------
-# 3. libxadi from source via D / ldc (mirrors Dockerfile build-xadi)
+# 3. libxadi from source via D / ldc (mirrors Dockerfile build-xadi).
+#
+#    libxadi is only needed for on-device operations (xtool install/launch),
+#    NOT for building or testing. ldc is fetched from GitHub releases because
+#    dlang.org's installer host is commonly blocked by the network policy. The
+#    whole step is best-effort: a failure here must not abort the Swift toolchain
+#    install below.
 # ---------------------------------------------------------------------------
-if [ ! -f "$MARKER_DIR/xadi.done" ]; then
-    log "installing D toolchain (ldc) and building libxadi..."
-    if [ ! -f "$HOME/dlang/install.sh" ]; then
-        curl -fsS https://dlang.org/install.sh | bash -s ldc
+LDC_VERSION="1.40.0"
+
+# Install ldc from GitHub releases and echo its bin directory.
+install_ldc() {
+    local root="$MARKER_DIR/ldc"
+    if [ -x "$root/bin/dub" ]; then
+        echo "$root/bin"; return 0
     fi
-    XADI_SRC="${MARKER_DIR}/src/xadi"
-    rm -rf "$XADI_SRC"
-    git clone --depth 1 --branch main https://github.com/xtool-org/xadi.git "$XADI_SRC"
+    local arch tarball url
+    arch="$(uname -m)"
+    tarball="ldc2-${LDC_VERSION}-linux-${arch}.tar.xz"
+    url="https://github.com/ldc-developers/ldc/releases/download/v${LDC_VERSION}/${tarball}"
+    rm -rf "$root"; mkdir -p "$root"
+    curl -fsSL "$url" -o "$MARKER_DIR/$tarball" || return 1
+    tar xf "$MARKER_DIR/$tarball" -C "$root" --strip-components=1 || return 1
+    rm -f "$MARKER_DIR/$tarball"
+    echo "$root/bin"
+}
+
+build_libxadi() {
+    local ldc_bin
+    ldc_bin="$(install_ldc)" || return 1
+    local src="${MARKER_DIR}/src/xadi"
+    rm -rf "$src"
+    git clone --depth 1 --branch main https://github.com/xtool-org/xadi.git "$src" || return 1
     (
-        cd "$XADI_SRC"
-        # shellcheck disable=SC1090
-        source "$("$HOME/dlang/install.sh" ldc -a)"
+        cd "$src"
+        export PATH="$ldc_bin:$PATH"
         dub build --build=release
         maybe_sudo cp -r bin/libxadi.so /usr/lib/libxadi.so
-    )
+    ) || return 1
     maybe_sudo ldconfig
-    touch "$MARKER_DIR/xadi.done"
+}
+
+if [ ! -f "$MARKER_DIR/xadi.done" ]; then
+    log "building libxadi (ldc $LDC_VERSION from GitHub)..."
+    # Called in an `if` condition so `set -e` does not abort on failure.
+    if build_libxadi; then
+        touch "$MARKER_DIR/xadi.done"
+    else
+        log "warning: libxadi build failed (on-device ops unavailable); continuing."
+    fi
 else
     log "libxadi already built, skipping."
 fi
