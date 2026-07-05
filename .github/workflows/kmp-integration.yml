@@ -62,7 +62,7 @@ jobs:
           # validating the build, not installing to a device.
           "$XTOOL" dev build
 
-      - name: Verify the .app was produced
+      - name: Verify the app embeds the KMP framework
         working-directory: peopleinspace/xtoolApp
         run: |
           set -euo pipefail
@@ -72,12 +72,26 @@ jobs:
             ls -la xtool || true
             exit 1
           fi
-          echo "Built $APP"
-          ls -la "$APP"
-          # Sanity-check the embedded shared framework made it into the bundle.
-          test -d "$APP/Frameworks/common.framework" \
-            && echo "Embedded common.framework ✓" \
-            || echo "::warning::common.framework not found under $APP/Frameworks"
+          echo "Built $APP"; ls -lR "$APP"
+
+          # The shared Kotlin framework is dynamic, so it MUST be embedded under
+          # Frameworks/ — otherwise the app links against a dylib that isn't in
+          # the bundle and crashes at launch. Name-agnostic: the XCFramework's
+          # inner framework baseName need not match the SwiftPM target name.
+          FW=$(find "$APP/Frameworks" -maxdepth 1 -name '*.framework' -type d 2>/dev/null | head -n1 || true)
+          if [ -z "$FW" ]; then
+            echo "::error::No embedded framework under $APP/Frameworks — the KMP shared framework was not packaged, so the app would not launch."
+            exit 1
+          fi
+          FW_NAME=$(basename "$FW" .framework)
+          echo "Embedded framework: $FW"
+          test -f "$FW/$FW_NAME" || { echo "::error::$FW has no Mach-O binary '$FW_NAME'"; exit 1; }
+
+          # The app binary must actually link the embedded framework.
+          otool -L "$APP/PeopleInSpaceXtool" | grep -q "$FW_NAME.framework/$FW_NAME" \
+            || { echo "::error::app binary does not link $FW_NAME.framework"; \
+                 otool -L "$APP/PeopleInSpaceXtool"; exit 1; }
+          echo "App links $FW_NAME.framework ✓"
 
       - name: Package the test app
         working-directory: peopleinspace/xtoolApp
