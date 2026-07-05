@@ -137,7 +137,7 @@ public struct Planner: Sendable {
             }
             guard visited.insert(targetName).inserted else { continue }
             if target.moduleType == "BinaryTarget" {
-                resources.append(.binaryTarget(name: targetName))
+                resources.append(.binaryTarget(name: targetName, path: target.path))
             }
             if target.resources?.isEmpty == false {
                 resources.append(.bundle(package: targetPackage.name, target: targetName))
@@ -299,7 +299,7 @@ public struct Plan: Sendable {
 
     public enum Resource: Codable, Sendable, Hashable {
         case bundle(package: String, target: String)
-        case binaryTarget(name: String)
+        case binaryTarget(name: String, path: String?)
         case library(name: String)
         case root(source: String)
     }
@@ -409,6 +409,9 @@ private struct PackageDump: Decodable {
         let productDependencies: [String]?
         let targetDependencies: [String]?
         let resources: [Resource]?
+        // For binary targets, the path to the artifact (e.g. an .xcframework),
+        // relative to the package root.
+        let path: String?
     }
 
     struct Resource: Decodable {

@@ -143,8 +143,14 @@ public struct Packer: Sendable {
                 switch command {
                 case .bundle(let package, let target):
                     try await packFile(srcName: "\(package)_\(target).bundle")
-                case .binaryTarget(let name):
-                    let src = URL(fileURLWithPath: "\(name).framework/\(name)", relativeTo: binDir)
+                case .binaryTarget(let name, let path):
+                    // The framework inside an .xcframework need not share the SwiftPM
+                    // binary target's name: e.g. a Kotlin `XCFramework("PeopleInSpaceKit")`
+                    // whose `baseName` is "common" produces `common.framework`. SwiftPM
+                    // stages that inner framework under its real name, so resolve it from
+                    // the xcframework's Info.plist and fall back to the target name.
+                    let frameworkName = await Self.frameworkName(inXCFrameworkAt: path) ?? name
+                    let src = URL(fileURLWithPath: "\(frameworkName).framework/\(frameworkName)", relativeTo: binDir)
                     let magic = Data("!<arch>\n".utf8)
                     let thinMagic = Data("!<thin>\n".utf8)
                     guard let bytes = try? FileHandle(forReadingFrom: src).read(upToCount: magic.count) else {
@@ -156,7 +162,11 @@ public struct Packer: Sendable {
                     // https://github.com/apple/llvm-project/blob/e716ff14c46490d2da6b240806c04e2beef01f40/llvm/include/llvm/Object/Archive.h#L33
                     // swiftlint:disable:previous line_length
                     if bytes != magic && bytes != thinMagic {
-                        try await packFile(srcName: "\(name).framework", dstName: "Frameworks/\(name).framework", sign: true)
+                        try await packFile(
+                            srcName: "\(frameworkName).framework",
+                            dstName: "Frameworks/\(frameworkName).framework",
+                            sign: true
+                        )
                     }
                 case .library(let name):
                     try await packFile(srcName: "lib\(name).dylib", dstName: "Frameworks/lib\(name).dylib", sign: true)
@@ -195,6 +205,27 @@ public struct Packer: Sendable {
             )
             try encodedPlist.write(to: infoPath)
         }
+    }
+
+    /// Resolves the name of the framework contained in an `.xcframework` (without
+    /// the `.framework` extension) by reading its `Info.plist`. Returns `nil` when
+    /// the path is not an xcframework or the plist can't be parsed, so callers can
+    /// fall back to the binary target's own name.
+    private static func frameworkName(inXCFrameworkAt path: String?) async -> String? {
+        guard let path, path.hasSuffix(".xcframework") else { return nil }
+        let plistURL = URL(fileURLWithPath: path).appendingPathComponent("Info.plist")
+        guard
+            let data = try? await Data(reading: plistURL),
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+            let dict = plist as? [String: Any],
+            let libraries = dict["AvailableLibraries"] as? [[String: Any]],
+            // Every slice lists the same framework file name under LibraryPath
+            // (e.g. "common.framework"), so the first entry is sufficient.
+            let libraryPath = libraries.first?["LibraryPath"] as? String
+        else {
+            return nil
+        }
+        return (libraryPath as NSString).deletingPathExtension
     }
 }
 
