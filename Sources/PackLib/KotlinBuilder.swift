@@ -54,7 +54,12 @@ public struct KotlinBuilder: Sendable {
 
     public func run() async throws {
         let fm = FileManager.default
-        let projectDir = URL(fileURLWithPath: plan.projectDir, isDirectory: true)
+        // Standardize so a relative projectDir like ".." collapses to a clean
+        // absolute path. FileManager tolerates ".." segments, but Darwin's
+        // Process.run() rejects an executableURL containing them with a spurious
+        // "file doesn't exist" error, so the Gradle wrapper must be launched via
+        // a fully-resolved path.
+        let projectDir = URL(fileURLWithPath: plan.projectDir, isDirectory: true).standardizedFileURL
 
         try await checkPrerequisites()
 
