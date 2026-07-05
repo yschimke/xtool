@@ -78,3 +78,22 @@ jobs:
           test -d "$APP/Frameworks/common.framework" \
             && echo "Embedded common.framework ✓" \
             || echo "::warning::common.framework not found under $APP/Frameworks"
+
+      - name: Package the test app
+        working-directory: peopleinspace/xtoolApp
+        run: |
+          set -euo pipefail
+          APP="xtool/PeopleInSpaceXtool.app"
+          # ditto (not `zip`) so the bundle's symlinks/resources survive the round
+          # trip. This is an unsigned arm64-apple-ios .app: install it to a device
+          # with `xtool install PeopleInSpaceXtool.app` (xtool signs on install).
+          ditto -c -k --sequesterRsrc --keepParent "$APP" PeopleInSpaceXtool-ios.app.zip
+          ls -la PeopleInSpaceXtool-ios.app.zip
+
+      - name: Upload test app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PeopleInSpaceXtool-ios-app
+          path: peopleinspace/xtoolApp/PeopleInSpaceXtool-ios.app.zip
+          if-no-files-found: error
+          retention-days: 14
